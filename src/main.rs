@@ -6,23 +6,27 @@ use std::{
 use clap::Parser;
 
 use crossterm::{
-    cursor::{self, MoveDown, MoveTo},
+    cursor::{self, MoveDown, MoveTo, MoveToColumn},
     event::{read, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent},
     execute, queue,
     style::{self, Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor, Stylize},
-    terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, SetTitle},
+    terminal::{
+        self, disable_raw_mode, enable_raw_mode, Clear, ClearType, EnterAlternateScreen,
+        LeaveAlternateScreen, SetTitle,
+    },
     ExecutableCommand, QueueableCommand,
 };
 use std::time::Duration as duration;
 
 extern crate unicode_width;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 fn main() -> std::io::Result<()> {
     let args = Args::parse();
 
     let mut stdout = stdout();
     queue!(stdout, EnterAlternateScreen)?;
+    enable_raw_mode()?;
 
     // 端末のサイズを取得する
     let (term_width, term_height) = terminal::size()?;
@@ -33,11 +37,36 @@ fn main() -> std::io::Result<()> {
     // エディタ領域に表示する文字列を取得する
     let editor_contents = get_editor_contents(&contents, term_width, term_height, 0, 0);
 
-    stdout.queue(Print(editor_contents.clone()))?;
+    // stdout.queue(Print(editor_contents.clone()))?;
+    // RAWモードで出力するので、一行一行出力する
+    for line in editor_contents.lines() {
+        stdout.queue(Print(line))?;
+
+        // 最終行でない場合は、改行する
+        if line != editor_contents.lines().last().unwrap() {
+            stdout.queue(Print("\n"))?;
+        }
+
+        // カーソルを次の行に移動する
+        stdout.queue(MoveToColumn(0))?;
+    }
 
     stdout.flush()?;
 
-    sleep(duration::from_secs(1));
+    // Ctrl + Q で抜ける
+    loop {
+        if let Ok(Event::Key(KeyEvent {
+            code: KeyCode::Char('q'),
+            modifiers: _,
+            kind,
+            state,
+        })) = read()
+        {
+            break;
+        }
+    }
+
+    disable_raw_mode()?;
 
     queue!(stdout, LeaveAlternateScreen)?;
     Ok(())
@@ -90,6 +119,9 @@ fn get_editor_contents(
     let mut line_number = 1;
 
     for line in contents.lines() {
+        // 行を表示幅に分割したベクタを取得する
+        let split_line = split_string_by_width(line, line_width);
+
         // 行番号と後ろの空白を追加する
         editor_contents.push_str(&format!(
             "{:width$} ",
@@ -97,34 +129,25 @@ fn get_editor_contents(
             width = line_number_digits
         ));
 
-        // editor_area_widthよりも長い場合は、line_widthの長さに切り詰める
-        if line.width() > line_width {
-            editor_contents.push_str(&line[..line_width]);
-        } else {
-            editor_contents.push_str(line);
+        // 行を表示幅に分割したベクタを結合する
+        if split_line.is_empty() {
             editor_contents.push('\n');
-            line_number += 1;
-
-            continue;
+        } else {
+            editor_contents.push_str(split_line[0].as_str());
+            editor_contents.push('\n');
         }
 
-        // editor_area_widthよりも長い場合は、次の行に移動する
-        // 行番号は表示せず、空白を追加する
-        split_string_by_width(&line[line_width..], line_width)
-            .iter()
-            .for_each(|line| {
+        // 分割して2行以上になった場合は、行番号を表示しない
+        if split_line.len() > 1 {
+            split_line[1..].iter().for_each(|line| {
                 editor_contents.push_str(&" ".repeat(line_number_digits + line_number_space));
                 editor_contents.push_str(line);
                 editor_contents.push('\n');
             });
+        }
 
         line_number += 1;
     }
-
-    // // editor_area_heightよりも少ない場合は、空白を追加する
-    // if contents_lines < editor_area_height as usize {
-    //     editor_contents.push_str(&"\n".repeat(editor_area_height as usize - contents_lines - 1));
-    // }
 
     // カーソルの位置から表示する領域を計算する
     let (start_x, start_y, end_x, end_y) =
@@ -171,22 +194,28 @@ fn get_editor_contents(
 /// * `contents`の文字列の長さが`width`よりも長い場合は、`width`の長さに切り詰める(これを繰り返す)
 fn split_string_by_width(value: &str, width: usize) -> Vec<String> {
     let mut result = Vec::new();
-    let mut remaining_string = value;
 
-    while remaining_string.width() > width {
-        // 表示幅を考慮した行の切り出しをする
-        for (i, c) in remaining_string.char_indices() {
-            if i == width {
-                result.push(remaining_string[..i].to_string());
-                remaining_string = &remaining_string[i..];
-                break;
-            }
+    let mut current_string = "".to_string();
+
+    // 表示幅を考慮した行の切り出しをする
+    for i in 0..value.chars().count() {
+        let char = value.chars().nth(i).unwrap();
+
+        if current_string.width() + char.width().unwrap() <= width {
+            current_string.push(char);
         }
 
-        remaining_string = &remaining_string[width..];
+        if (current_string.width() == width) || (i == value.chars().count() - 1) {
+            result.push(current_string.clone());
+            current_string = "".to_string();
+        } else {
+            let next_char = value.chars().nth(i + 1).unwrap();
+            if width < current_string.width() + next_char.width().unwrap() {
+                result.push(current_string.clone());
+                current_string = "".to_string();
+            }
+        }
     }
-
-    result.push(remaining_string.to_string());
 
     result
 }
@@ -202,7 +231,9 @@ fn split_string_by_width(value: &str, width: usize) -> Vec<String> {
 /// # Examples
 /// ```
 /// let contents = "Alice\nBob\nCarol\nDave\nEve\nFrank\nGrace\nHeidi\nIvan";
-/// let contents = a;
+/// let width = 5;
+/// let result = get_display_area(contents, width, 0, 0);
+/// assert_eq!(result, (0, 0, 5, 5));
 /// ```
 /// # Panics
 ///
@@ -243,4 +274,30 @@ struct Args {
     /// File
     #[clap(required = true)]
     file: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    /// ASCII文字列の場合
+    fn test_split_string_by_width_all_ascii() {
+        let contents = "Hello, world!";
+        let width = 5;
+        let result = split_string_by_width(contents, width);
+        assert_eq!(result, vec!["Hello", ", wor", "ld!"]);
+    }
+
+    #[test]
+    /// ASCII文字列と日本語文字列が混在する場合
+    /// 日本語文字列は、2文字分の幅を占有する
+    /// そのため、表示幅を考慮した行の切り出しをする
+    fn test_split_string_by_width_ascii_and_japanese() {
+        let contents = "Hello, 世界!";
+        let width = 5;
+        let result = split_string_by_width(contents, width);
+        // ", 世" は、表示幅が4だけど、次の"界"が表示幅を超えるので、"世"は次の行に移動する
+        assert_eq!(result, vec!["Hello", ", 世", "界!"]);
+    }
 }
