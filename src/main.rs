@@ -76,7 +76,7 @@ fn main() -> std::io::Result<()> {
                     get_editor_contents(&contents, term_width, term_height, cursor_x, cursor_y);
 
                 if editor_contents.lines().count() < term_height as usize {
-                    cursor_y += 1;
+                    cursor_y = if cursor_y == 0 { 0 } else { cursor_y + 1 };
                     editor_contents =
                         get_editor_contents(&contents, term_width, term_height, cursor_x, cursor_y);
                 }
