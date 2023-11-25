@@ -1,13 +1,16 @@
 use std::{
-    io::{stdout, Read, Write},
+    io::{stdout, Read, Stdout, Write},
     thread::sleep,
+    time::Duration,
 };
 
 use clap::Parser;
 
 use crossterm::{
-    cursor::{self, MoveDown, MoveTo, MoveToColumn},
-    event::{read, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent},
+    cursor::{self, DisableBlinking, EnableBlinking, Hide, MoveDown, MoveTo, MoveToColumn, Show},
+    event::{
+        poll, read, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+    },
     execute, queue,
     style::{self, Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor, Stylize},
     terminal::{
@@ -16,7 +19,6 @@ use crossterm::{
     },
     ExecutableCommand, QueueableCommand,
 };
-use std::time::Duration as duration;
 
 extern crate unicode_width;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -24,51 +26,122 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 fn main() -> std::io::Result<()> {
     let args = Args::parse();
 
-    let mut stdout = stdout();
-    queue!(stdout, EnterAlternateScreen)?;
+    queue!(stdout(), EnterAlternateScreen)?;
     enable_raw_mode()?;
+
+    queue!(stdout(), Hide)?;
 
     // 端末のサイズを取得する
     let (term_width, term_height) = terminal::size()?;
 
     let contents = std::fs::read_to_string(args.file).unwrap();
-    // execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
+    execute!(stdout(), terminal::Clear(terminal::ClearType::All))?;
 
     // エディタ領域に表示する文字列を取得する
-    let editor_contents = get_editor_contents(&contents, term_width, term_height, 0, 0);
+    let mut cursor_x = 0;
+    let mut cursor_y = 0;
+    let editor_contents =
+        get_editor_contents(&contents, term_width, term_height, cursor_x, cursor_y);
 
-    // stdout.queue(Print(editor_contents.clone()))?;
-    // RAWモードで出力するので、一行一行出力する
-    for line in editor_contents.lines() {
-        stdout.queue(Print(line))?;
+    print_screen(&editor_contents)?;
 
-        // 最終行でない場合は、改行する
-        if line != editor_contents.lines().last().unwrap() {
-            stdout.queue(Print("\n"))?;
-        }
-
-        // カーソルを次の行に移動する
-        stdout.queue(MoveToColumn(0))?;
-    }
-
-    stdout.flush()?;
-
-    // Ctrl + Q で抜ける
     loop {
-        if let Ok(Event::Key(KeyEvent {
-            code: KeyCode::Char('q'),
-            modifiers: _,
-            kind,
-            state,
-        })) = read()
-        {
-            break;
+        let event = read()?;
+
+        // イベントを読み捨てるため、pollを呼び出す
+        while poll(Duration::from_secs(0))? {
+            let _ = read()?;
+        }
+
+        // Ctrl + W で抜ける
+        match event {
+            Event::Key(KeyEvent {
+                code: KeyCode::Char('w'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: _,
+                state: _,
+            }) => {
+                break;
+            }
+            // Upキーでカーソルを上に移動する
+            Event::Key(KeyEvent {
+                code: KeyCode::Up,
+                modifiers: _,
+                kind: _,
+                state: _,
+            }) => {
+                cursor_y = if cursor_y == 0 { 0 } else { cursor_y - 1 };
+                // エディタ領域に表示する文字列を取得する
+                let mut editor_contents =
+                    get_editor_contents(&contents, term_width, term_height, cursor_x, cursor_y);
+
+                if editor_contents.lines().count() < term_height as usize {
+                    cursor_y += 1;
+                    editor_contents =
+                        get_editor_contents(&contents, term_width, term_height, cursor_x, cursor_y);
+                }
+
+                print_screen(&editor_contents)?;
+            }
+            // Downキーでカーソルを下に移動する
+            Event::Key(KeyEvent {
+                code: KeyCode::Down,
+                modifiers: _,
+                kind: _,
+                state: _,
+            }) => {
+                cursor_y += 1;
+                // エディタ領域に表示する文字列を取得する
+                let mut editor_contents =
+                    get_editor_contents(&contents, term_width, term_height, cursor_x, cursor_y);
+
+                if editor_contents.lines().count() < term_height as usize {
+                    cursor_y -= 1;
+                    editor_contents =
+                        get_editor_contents(&contents, term_width, term_height, cursor_x, cursor_y);
+                }
+
+                print_screen(&editor_contents)?;
+            }
+            // RightキーとLeftキーでX軸方向でカーソルを移動する機能は未実装
+            // 理由: 今は必ずおりたたみ表示になるので、X軸方向でカーソルを移動する機能は不要
+            Event::FocusGained => todo!(),
+            Event::FocusLost => todo!(),
+            Event::Mouse(_) => todo!(),
+            Event::Paste(_) => todo!(),
+            Event::Resize(_, _) => todo!(),
+            _ => {}
         }
     }
+
+    queue!(stdout(), Show)?;
 
     disable_raw_mode()?;
 
-    queue!(stdout, LeaveAlternateScreen)?;
+    queue!(stdout(), LeaveAlternateScreen)?;
+    Ok(())
+}
+
+fn print_screen(contents: &str) -> std::io::Result<()> {
+    // RAWモードで出力するので、一行一行出力する
+
+    stdout().queue(MoveTo(0, 0))?;
+    stdout().queue(Clear(ClearType::All))?;
+
+    for line in contents.lines() {
+        stdout().queue(Print(line))?;
+
+        // 最終行でない場合は、改行する
+        if line != contents.lines().last().unwrap() {
+            stdout().queue(Print("\n"))?;
+        }
+
+        // カーソルを次の行に移動する
+        stdout().queue(MoveToColumn(0))?;
+    }
+
+    stdout().flush()?;
+
     Ok(())
 }
 
@@ -245,16 +318,8 @@ fn get_display_area(
     cursor_y: u16,
 ) -> (u16, u16, u16, u16) {
     // カーソルの位置から表示する領域を計算する
-    let start_x = if cursor_x > editor_area_width / 2 {
-        cursor_x - editor_area_width / 2
-    } else {
-        0
-    };
-    let start_y = if cursor_y > editor_area_height / 2 {
-        cursor_y - editor_area_height / 2
-    } else {
-        0
-    };
+    let start_x = cursor_x;
+    let start_y = cursor_y;
     let end_x = start_x + editor_area_width;
     let end_y = start_y + editor_area_height;
 
@@ -299,5 +364,14 @@ mod tests {
         let result = split_string_by_width(contents, width);
         // ", 世" は、表示幅が4だけど、次の"界"が表示幅を超えるので、"世"は次の行に移動する
         assert_eq!(result, vec!["Hello", ", 世", "界!"]);
+    }
+
+    #[test]
+    fn test_get_display_area() {
+        let contents = "Alice\nBob\nCarol\nDave\nEve\nFrank\nGrace\nHeidi\nIvan";
+        let width = 100;
+        let height = 5;
+        let result = get_display_area(width, height, 0, 0);
+        assert_eq!(result, (0, 0, 5, 5));
     }
 }
