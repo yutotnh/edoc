@@ -441,6 +441,22 @@ mod tests {
         let width = 100;
         let height = 5;
         let result = get_display_area(width, height, 0, 0);
-        assert_eq!(result, (0, 0, 5, 5));
+        assert_eq!(result, (0, 0, 100, 5));
+
+        let result = get_display_area(width, height, 0, 1);
+        assert_eq!(result, (0, 1, 100, 6));
+
+        let result = get_display_area(width, height, 0, 2);
+        assert_eq!(result, (0, 2, 100, 7));
+    }
+
+    #[test]
+    fn test_get_editor_contents() {
+        let contents = "Alice\nBob\nCarol\nDave\nEve\nFrank\nGrace\nHeidi\nIvan";
+        let width = 100;
+        let height = 5;
+        let result = get_editor_contents(contents, width, height, 0, 0);
+        // 最後の行を改行すると、表示領域の最後の行が空白になるので、最後の行を改行しないことが重要
+        assert_eq!(result, "1 Alice\n2 Bob\n3 Carol\n4 Dave\n5 Eve");
     }
 }
