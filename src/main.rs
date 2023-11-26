@@ -30,7 +30,7 @@ fn main() -> std::io::Result<()> {
     let args = Args::parse();
 
     // 端末のサイズを取得する
-    let (term_width, term_height) = terminal::size()?;
+    let (mut term_width, mut term_height) = terminal::size()?;
 
     let mut contents = String::new();
 
@@ -135,7 +135,22 @@ fn main() -> std::io::Result<()> {
             Event::FocusLost => todo!(),
             Event::Mouse(_) => todo!(),
             Event::Paste(_) => todo!(),
-            Event::Resize(_, _) => todo!(),
+            Event::Resize(columns, rows) => {
+                term_width = columns;
+                term_height = rows;
+
+                // エディタ領域に表示する文字列を取得する
+                let mut editor_contents =
+                    get_editor_contents(&contents, term_width, term_height, cursor_x, cursor_y);
+
+                if editor_contents.lines().count() < term_height as usize {
+                    cursor_y -= 1;
+                    editor_contents =
+                        get_editor_contents(&contents, term_width, term_height, cursor_x, cursor_y);
+                }
+
+                print_screen(&editor_contents)?;
+            }
             _ => {}
         }
     }
@@ -248,7 +263,7 @@ fn print_screen(contents: &str) -> std::io::Result<()> {
 /// * `contents`の文字列の長さが`term_width`よりも短い場合は、空白を追加する
 /// * `contents`の行数が`term_height`よりも少ない場合は、空白を追加する
 fn get_editor_contents(
-    contents: &str,
+    contents: &String,
     editor_area_width: u16,
     editor_area_height: u16,
     cursor_x: u16,
@@ -344,39 +359,30 @@ fn get_editor_contents(
 ///
 /// # Notes
 /// * `contents`の文字列の長さが`width`よりも長い場合は、`width`の長さに切り詰める(これを繰り返す)
-fn split_string_by_width(value: &str, width: usize) -> Vec<String> {
+fn split_string_by_width(s: &str, width: usize) -> Vec<String> {
     let mut result = Vec::new();
+    let mut current_width = 0;
+    let mut start = 0;
 
-    let mut current_string = "".to_string();
-
-    // 表示幅を考慮した行の切り出しをする
-    for i in 0..value.chars().count() {
-        let char = value.chars().nth(i).unwrap();
-
-        if char.width().is_none() {
-            continue;
+    for (i, c) in s.char_indices() {
+        let c_width = if is_escape(c) { 0 } else { c.width().unwrap() };
+        if current_width + c_width > width {
+            result.push(s[start..i].to_string());
+            start = i;
+            current_width = 0;
         }
+        current_width += c_width;
+    }
 
-        if current_string.width() + char.width().unwrap() <= width {
-            current_string.push(char);
-        }
-
-        if (current_string.width() == width) || (i == value.chars().count() - 1) {
-            result.push(current_string.clone());
-            current_string = "".to_string();
-        } else {
-            let next_char = value.chars().nth(i + 1).unwrap();
-            if next_char.width().is_none() {
-                continue;
-            }
-            if width < current_string.width() + next_char.width().unwrap() {
-                result.push(current_string.clone());
-                current_string = "".to_string();
-            }
-        }
+    if start < s.len() {
+        result.push(s[start..].to_string());
     }
 
     result
+}
+
+fn is_escape(c: char) -> bool {
+    c == '\x1b'
 }
 
 /// カーソル位置から表示する領域を計算する
@@ -471,7 +477,7 @@ mod tests {
         let contents = "Alice\nBob\nCarol\nDave\nEve\nFrank\nGrace\nHeidi\nIvan";
         let width = 100;
         let height = 5;
-        let result = get_editor_contents(contents, width, height, 0, 0);
+        let result = get_editor_contents(&contents.to_string(), width, height, 0, 0);
         // 最後の行を改行すると、表示領域の最後の行が空白になるので、最後の行を改行しないことが重要
         assert_eq!(result, "1 Alice\n2 Bob\n3 Carol\n4 Dave\n5 Eve");
     }
