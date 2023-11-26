@@ -52,6 +52,15 @@ fn main() -> std::io::Result<()> {
 
     queue!(stdout(), Hide)?;
 
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        queue!(stdout(), Show).unwrap();
+        disable_raw_mode().unwrap();
+        queue!(stdout(), LeaveAlternateScreen).unwrap();
+        stdout().flush().unwrap();
+        default_hook(panic_info);
+    }));
+
     execute!(stdout(), terminal::Clear(terminal::ClearType::All))?;
 
     // エディタ領域に表示する文字列を取得する
@@ -344,6 +353,10 @@ fn split_string_by_width(value: &str, width: usize) -> Vec<String> {
     for i in 0..value.chars().count() {
         let char = value.chars().nth(i).unwrap();
 
+        if char.width().is_none() {
+            continue;
+        }
+
         if current_string.width() + char.width().unwrap() <= width {
             current_string.push(char);
         }
@@ -353,6 +366,9 @@ fn split_string_by_width(value: &str, width: usize) -> Vec<String> {
             current_string = "".to_string();
         } else {
             let next_char = value.chars().nth(i + 1).unwrap();
+            if next_char.width().is_none() {
+                continue;
+            }
             if width < current_string.width() + next_char.width().unwrap() {
                 result.push(current_string.clone());
                 current_string = "".to_string();
