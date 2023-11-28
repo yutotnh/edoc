@@ -144,7 +144,6 @@ fn main() -> std::io::Result<()> {
                     get_editor_contents(&contents, term_width, term_height, cursor_x, cursor_y);
 
                 if editor_contents.lines().count() < term_height as usize {
-                    cursor_y -= 1;
                     editor_contents =
                         get_editor_contents(&contents, term_width, term_height, cursor_x, cursor_y);
                 }
@@ -270,8 +269,7 @@ fn get_editor_contents(
     cursor_y: u16,
 ) -> String {
     // 行番号の表示に必要な桁数を計算する
-    let contents_lines = contents.lines().count();
-    let line_number_digits = contents_lines.to_string().len();
+    let line_number_digits = contents.lines().count().to_string().len();
 
     // 行番号とコンテンツの間の空白の数
     let line_number_space = 1;
@@ -290,10 +288,14 @@ fn get_editor_contents(
         let split_line = split_string_by_width(line, line_width);
 
         // 行番号と後ろの空白を追加する
+        // 行番号が前後のエスケープシーケンスによって色が変わるので、
+        // 行番号自体の色を
         editor_contents.push_str(&format!(
-            "{:width$} ",
+            "{}{:width$} {}",
+            style::SetForegroundColor(Color::DarkGrey),
             line_number,
-            width = line_number_digits
+            style::ResetColor,
+            width = line_number_digits,
         ));
 
         // 行を表示幅に分割したベクタを結合する
@@ -305,7 +307,7 @@ fn get_editor_contents(
         }
 
         // 分割して2行以上になった場合は、行番号を表示しない
-        if split_line.len() > 1 {
+        if 1 < split_line.len() {
             split_line[1..].iter().for_each(|line| {
                 editor_contents.push_str(&" ".repeat(line_number_digits + line_number_space));
                 editor_contents.push_str(line);
@@ -320,24 +322,14 @@ fn get_editor_contents(
     let (start_x, start_y, end_x, end_y) =
         get_display_area(editor_area_width, editor_area_height, cursor_x, cursor_y);
 
-    // 表示する領域を切り出す
-    editor_contents = editor_contents
+    // エスケープシーケンスを考慮して表示する領域を切り出す
+    // x軸方向の切り出しは、行わない(エスケープシーケンスの考慮が面倒なのと、今は必ずおりたたみ表示になるので、y軸方向の切り出しは不要)
+    let editor_contents = editor_contents
         .lines()
         .skip(start_y as usize)
-        .take(end_y as usize - start_y as usize)
-        .map(|line| {
-            let mut line = line
-                .chars()
-                .skip(start_x as usize)
-                .take(end_x as usize - start_x as usize)
-                .collect::<String>();
-            line.push('\n');
-            line
-        })
-        .collect::<String>();
-
-    // 表示する領域の最後の改行を削除する
-    editor_contents.pop();
+        .take((end_y - start_y) as usize)
+        .collect::<Vec<&str>>()
+        .join("\n");
 
     editor_contents
 }
@@ -362,21 +354,40 @@ fn get_editor_contents(
 fn split_string_by_width(s: &str, width: usize) -> Vec<String> {
     let mut result = Vec::new();
     let mut current_width = 0;
-    let mut start = 0;
+    let mut current_line = String::new();
+
+    // エスケープシーケンス中は、文字列の長さを計算しない
+    let mut is_ansi_escape_sequence = false;
 
     for (i, c) in s.char_indices() {
-        let c_width = if is_escape(c) { 0 } else { c.width().unwrap() };
-        if current_width + c_width > width {
-            result.push(s[start..i].to_string());
-            start = i;
-            current_width = 0;
+        if is_escape(c) {
+            is_ansi_escape_sequence = true;
+            current_line.push(c);
+            continue;
         }
-        current_width += c_width;
+
+        if is_ansi_escape_sequence {
+            // エスケープシーケンスの終了を判定する
+            if c == 'm' {
+                is_ansi_escape_sequence = false;
+            }
+            current_line.push(c);
+            continue;
+        }
+
+        if current_width + c.width().unwrap() > width {
+            current_width = 0;
+
+            result.push(current_line.clone());
+            current_line.clear();
+        }
+
+        current_line.push(c);
+
+        current_width += c.width().unwrap();
     }
 
-    if start < s.len() {
-        result.push(s[start..].to_string());
-    }
+    result.push(current_line);
 
     result
 }
@@ -458,6 +469,27 @@ mod tests {
     }
 
     #[test]
+    /// エスケープシーケンスが含まれる場合
+    /// エスケープシーケンスは、表示幅に含めない
+    /// そのため、表示幅を考慮した行の切り出しをする
+    /// エスケープシーケンスは、\x1bで始まる
+    /// エスケープシーケンスは、mで終わる
+    fn test_split_string_by_width_with_escape_sequence() {
+        // エスケープシーケンスが含まれる場合
+        let contents = "\x1b[31mHello, world!\x1b[0m";
+        let width = 5;
+        let result = split_string_by_width(contents, width);
+        assert_eq!(result, vec!["\x1b[31mHello", ", wor", "ld!\x1b[0m"]);
+
+        // マルチバイト文字列の場合
+        let contents = "\x1b[31mあい\x1b[0mう";
+        let width = 5;
+        let result = split_string_by_width(contents, width);
+        // "\x1b[31m" は、表示幅が0だけど、次の"Hello"が表示幅を超えるので、"Hello"は次の行に移動する
+        assert_eq!(result, vec!["\x1b[31mあい\x1b[0m", "う"]);
+    }
+
+    #[test]
     fn test_get_display_area() {
         let contents = "Alice\nBob\nCarol\nDave\nEve\nFrank\nGrace\nHeidi\nIvan";
         let width = 100;
@@ -479,6 +511,10 @@ mod tests {
         let height = 5;
         let result = get_editor_contents(&contents.to_string(), width, height, 0, 0);
         // 最後の行を改行すると、表示領域の最後の行が空白になるので、最後の行を改行しないことが重要
-        assert_eq!(result, "1 Alice\n2 Bob\n3 Carol\n4 Dave\n5 Eve");
+        // TODO 行番号の色を変数にして、テストを書きやすくする
+        assert_eq!(
+            result,
+            "\x1b[38;5;8m1 \x1b[0mAlice\n\x1b[38;5;8m2 \x1b[0mBob\n\x1b[38;5;8m3 \x1b[0mCarol\n\x1b[38;5;8m4 \x1b[0mDave\n\x1b[38;5;8m5 \x1b[0mEve"
+        );
     }
 }
