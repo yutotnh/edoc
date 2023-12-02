@@ -1,4 +1,4 @@
-use std::io::{stdout, Write};
+use std::io::stdout;
 
 use crossterm::{
     cursor::{MoveTo, MoveToColumn},
@@ -28,8 +28,6 @@ pub fn print_screen(contents: &str) -> std::io::Result<()> {
         // カーソルを次の行に移動する
         stdout().queue(MoveToColumn(0))?;
     }
-
-    stdout().flush()?;
 
     Ok(())
 }

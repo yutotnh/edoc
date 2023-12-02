@@ -19,6 +19,7 @@ extern crate unicode_width;
 use clap::CommandFactory;
 
 mod contents;
+mod status_bar;
 
 fn main() -> std::io::Result<()> {
     let args = Args::parse();
@@ -28,7 +29,7 @@ fn main() -> std::io::Result<()> {
 
     let mut contents = String::new();
 
-    match get_contents(args.file, &mut contents) {
+    match get_contents(args.file.clone(), &mut contents) {
         Ok(_) => {}
         Err(e) => {
             // 標準入力がなく、ファイルを指定していない場合はヘルプを表示するため、標準エラー出力には何も出力しない
@@ -56,8 +57,20 @@ fn main() -> std::io::Result<()> {
     }));
 
     execute!(stdout(), terminal::Clear(terminal::ClearType::All))?;
-    let status_bar_height = 0;
-    let _status_bar_width = term_width;
+    let status_bar_height = 1;
+    let status_bar_width = term_width;
+
+    let mut status_bar = status_bar::StatusBar::new(
+        status_bar_width,
+        status_bar_height,
+        0,
+        term_height - status_bar_height,
+    );
+
+    let status_bar_encoding =
+        status_bar::StatusBarItem::new("encoding".to_string(), "UTF-8".to_string());
+
+    status_bar.add_item(status_bar_encoding);
 
     // エディタ領域に表示する文字列を取得する
     let cursor_x = 0;
@@ -66,7 +79,15 @@ fn main() -> std::io::Result<()> {
     let editor_contents =
         contents::get_editor_contents(&contents, term_width, editor_height, cursor_x, cursor_y);
 
+    let status_bar_line = status_bar::StatusBarItem::new(
+        "line".to_string(),
+        "ln ".to_string() + (cursor_y + 1).to_string().as_str(),
+    );
+    status_bar.add_item(status_bar_line);
+
     contents::print_screen(&editor_contents)?;
+    status_bar.print();
+    stdout().flush()?;
 
     loop {
         let event = read()?;
@@ -113,8 +134,15 @@ fn main() -> std::io::Result<()> {
                         cursor_y,
                     );
                 }
+                let status_bar_line = status_bar::StatusBarItem::new(
+                    "line".to_string(),
+                    "ln ".to_string() + (cursor_y + 1).to_string().as_str(),
+                );
+                status_bar.add_item(status_bar_line);
 
                 contents::print_screen(&editor_contents)?;
+                status_bar.print();
+                stdout().flush()?;
             }
             // Downキーでカーソルを下に移動する
             Event::Key(KeyEvent {
@@ -143,8 +171,15 @@ fn main() -> std::io::Result<()> {
                         cursor_y,
                     );
                 }
+                let status_bar_line = status_bar::StatusBarItem::new(
+                    "line".to_string(),
+                    "ln ".to_string() + (cursor_y + 1).to_string().as_str(),
+                );
+                status_bar.add_item(status_bar_line);
 
                 contents::print_screen(&editor_contents)?;
+                status_bar.print();
+                stdout().flush()?;
             }
             // RightキーとLeftキーでX軸方向でカーソルを移動する機能は未実装
             // 理由: 今は必ずおりたたみ表示になるので、X軸方向でカーソルを移動する機能は不要
@@ -175,8 +210,15 @@ fn main() -> std::io::Result<()> {
                         cursor_y,
                     );
                 }
+                let status_bar_line = status_bar::StatusBarItem::new(
+                    "line".to_string(),
+                    "ln ".to_string() + (cursor_y + 1).to_string().as_str(),
+                );
+                status_bar.add_item(status_bar_line);
 
                 contents::print_screen(&editor_contents)?;
+                status_bar.print();
+                stdout().flush()?;
             }
             _ => {}
         }
@@ -187,6 +229,8 @@ fn main() -> std::io::Result<()> {
     disable_raw_mode()?;
 
     queue!(stdout(), LeaveAlternateScreen)?;
+
+    stdout().flush()?;
     Ok(())
 }
 
