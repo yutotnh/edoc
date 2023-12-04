@@ -27,10 +27,8 @@ fn main() -> std::io::Result<()> {
     // 端末のサイズを取得する
     let (mut term_width, mut term_height) = terminal::size()?;
 
-    let mut contents = String::new();
-
-    match get_contents(args.file.clone(), &mut contents) {
-        Ok(_) => {}
+    let original_contents = match get_contents(args.file.clone()) {
+        Ok(contents) => contents,
         Err(e) => {
             // 標準入力がなく、ファイルを指定していない場合はヘルプを表示するため、標準エラー出力には何も出力しない
             if (e.kind() == std::io::ErrorKind::Other) && (e.to_string() == "No input file") {
@@ -40,7 +38,7 @@ fn main() -> std::io::Result<()> {
 
             std::process::exit(1);
         }
-    }
+    };
 
     queue!(stdout(), EnterAlternateScreen)?;
     enable_raw_mode()?;
@@ -76,8 +74,15 @@ fn main() -> std::io::Result<()> {
     let cursor_x = 0;
     let mut cursor_y = 0;
     let mut editor_height = term_height - status_bar_height;
-    let editor_contents =
-        contents::get_editor_contents(&contents, term_width, editor_height, cursor_x, cursor_y);
+    let mut contents = contents::Contents::new(
+        original_contents.clone(),
+        term_width,
+        editor_height,
+        0,
+        0,
+        cursor_x,
+        cursor_y,
+    );
 
     let status_bar_line = status_bar::StatusBarItem::new(
         "line".to_string(),
@@ -85,7 +90,7 @@ fn main() -> std::io::Result<()> {
     );
     status_bar.add_item(status_bar_line);
 
-    contents::print_screen(&editor_contents)?;
+    contents.print()?;
     status_bar.print();
     stdout().flush()?;
 
@@ -115,35 +120,31 @@ fn main() -> std::io::Result<()> {
                 state: _,
             }) => {
                 cursor_y = if cursor_y == 0 { 0 } else { cursor_y - 1 };
-                // エディタ領域に表示する文字列を取得する
-                let mut editor_contents = contents::get_editor_contents(
-                    &contents,
+
+                let mut contents = contents::Contents::new(
+                    original_contents.clone(),
                     term_width,
                     editor_height,
+                    0,
+                    0,
                     cursor_x,
                     cursor_y,
                 );
+                contents.print()?;
 
-                if editor_contents.lines().count() < editor_height as usize {
-                    cursor_y = if cursor_y == 0 { 0 } else { cursor_y + 1 };
-                    editor_contents = contents::get_editor_contents(
-                        &contents,
-                        term_width,
-                        editor_height,
-                        cursor_x,
-                        cursor_y,
-                    );
-                }
+                // 表示するときに再計算されるので、cursor_yを更新する
+                cursor_y = contents.cursor_y;
+
                 let status_bar_line = status_bar::StatusBarItem::new(
                     "line".to_string(),
                     "ln ".to_string() + (cursor_y + 1).to_string().as_str(),
                 );
                 status_bar.add_item(status_bar_line);
 
-                contents::print_screen(&editor_contents)?;
                 status_bar.print();
                 stdout().flush()?;
             }
+
             // Downキーでカーソルを下に移動する
             Event::Key(KeyEvent {
                 code: KeyCode::Down,
@@ -152,32 +153,27 @@ fn main() -> std::io::Result<()> {
                 state: _,
             }) => {
                 cursor_y += 1;
-                // エディタ領域に表示する文字列を取得する
-                let mut editor_contents = contents::get_editor_contents(
-                    &contents,
+
+                let mut contents = contents::Contents::new(
+                    original_contents.clone(),
                     term_width,
                     editor_height,
+                    0,
+                    0,
                     cursor_x,
                     cursor_y,
                 );
+                contents.print()?;
 
-                if editor_contents.lines().count() < editor_height as usize {
-                    cursor_y -= 1;
-                    editor_contents = contents::get_editor_contents(
-                        &contents,
-                        term_width,
-                        editor_height,
-                        cursor_x,
-                        cursor_y,
-                    );
-                }
+                // 表示するときに再計算されるので、cursor_yを更新する
+                cursor_y = contents.cursor_y;
+
                 let status_bar_line = status_bar::StatusBarItem::new(
                     "line".to_string(),
                     "ln ".to_string() + (cursor_y + 1).to_string().as_str(),
                 );
                 status_bar.add_item(status_bar_line);
 
-                contents::print_screen(&editor_contents)?;
                 status_bar.print();
                 stdout().flush()?;
             }
@@ -192,31 +188,30 @@ fn main() -> std::io::Result<()> {
                 term_height = rows;
                 editor_height = term_height - status_bar_height;
 
-                // エディタ領域に表示する文字列を取得する
-                let mut editor_contents = contents::get_editor_contents(
-                    &contents,
+                let mut contents = contents::Contents::new(
+                    original_contents.clone(),
                     term_width,
                     editor_height,
+                    0,
+                    0,
                     cursor_x,
                     cursor_y,
                 );
 
-                if editor_contents.lines().count() < editor_height as usize {
-                    editor_contents = contents::get_editor_contents(
-                        &contents,
-                        term_width,
-                        editor_height,
-                        cursor_x,
-                        cursor_y,
-                    );
-                }
+                status_bar.width = term_width;
+                status_bar.y_start = term_height - status_bar_height;
+
+                contents.print()?;
+
+                // 表示するときに再計算されるので、cursor_yを更新する
+                cursor_y = contents.cursor_y;
+
                 let status_bar_line = status_bar::StatusBarItem::new(
                     "line".to_string(),
                     "ln ".to_string() + (cursor_y + 1).to_string().as_str(),
                 );
                 status_bar.add_item(status_bar_line);
 
-                contents::print_screen(&editor_contents)?;
                 status_bar.print();
                 stdout().flush()?;
             }
@@ -237,9 +232,8 @@ fn main() -> std::io::Result<()> {
 /// ファイルの内容を取得する
 /// # Arguments
 /// * `file` - ファイル名
-/// * `contents` - ファイルの内容
 /// # Returns
-/// * `Result<(), std::io::Error>` - ファイルの内容を取得できた場合は、`Ok(())`を返す
+/// * `Result<String, std::io::Error>` - ファイルの内容を取得できた場合は、`Ok(String)`を返す
 /// # Examples
 /// ```
 /// let mut contents = String::new();
@@ -256,12 +250,13 @@ fn main() -> std::io::Result<()> {
 /// | `Some(file)` | 存在しない         | あり/なし | エラーを表示して終了する |
 /// | `None`       |                    | あり      | 標準入力の内容           |
 /// | `None`       |                    | なし      | エラーを表示して終了する |
-fn get_contents(file: Option<String>, contents: &mut String) -> Result<(), std::io::Error> {
+fn get_contents(file: Option<String>) -> Result<String, std::io::Error> {
+    let mut contents = String::new();
     match file {
         Some(file) => {
             // ファイルが存在しない場合は、エラーを表示して終了する
             match std::fs::read_to_string(&file) {
-                Ok(file_contents) => *contents = file_contents,
+                Ok(file_contents) => contents = file_contents,
                 Err(_) => {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::NotFound,
@@ -280,11 +275,11 @@ fn get_contents(file: Option<String>, contents: &mut String) -> Result<(), std::
                     "No input file",
                 ));
             } else {
-                std::io::stdin().read_to_string(contents)?;
+                std::io::stdin().read_to_string(&mut contents)?;
             }
         }
     };
-    Ok(())
+    Ok(contents)
 }
 
 #[derive(Debug, Parser)]
