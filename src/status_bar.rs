@@ -3,7 +3,7 @@ use std::io::stdout;
 use crossterm::{
     cursor::MoveTo,
     queue,
-    style::{Print, ResetColor},
+    style::{Attribute, Print, ResetColor},
     QueueableCommand,
 };
 
@@ -66,8 +66,7 @@ impl StatusBar {
         stdout().queue(MoveTo(0, self.y_start)).unwrap();
 
         // ステータスバーの文字色と背景色を反転する
-        queue!(stdout(), Print("\x1b[7m")).unwrap();
-
+        queue!(stdout(), Print(Attribute::Reverse)).unwrap();
         // 1行すべてを背景色で塗りつぶす
         queue!(stdout(), Print(" ".repeat(self.width as usize))).unwrap();
 
